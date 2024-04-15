@@ -4,11 +4,13 @@ from io import StringIO
 import unittest
 import unittest.mock as mock
 import os
+import stat
 import sys
 import syslog
 import uuid
 
 import blktap2
+import SR
 import util
 
 
@@ -146,6 +148,35 @@ class TestVDI(unittest.TestCase):
         sm_vdi_patcher = mock.patch('blktap2.sm')
         self.mock_sm_vdi = sm_vdi_patcher.start()
 
+        exists_patcher = mock.patch('blktap2.util.pathexists', autospec=True)
+        self.mock_exists = exists_patcher.start()
+
+        os_patcher = mock.patch('blktap2.os', name="MockOS")
+        self.mock_os = os_patcher.start()
+        self.mock_os.major = os.major
+        self.mock_os.minor = os.minor
+
+        self.real_paths = {}
+        self.mock_os.path.realpath.side_effect = self.realpath
+
+        self.real_tapdisk = blktap2.Tapdisk
+        tapdisk_patcher = mock.patch('blktap2.Tapdisk')
+        self.mock_tapdisk = tapdisk_patcher.start()
+        # Always return the common blktap major
+        self.mock_tapdisk.major.return_value = 254
+
+        ratecontrol_patcher = mock.patch('blktap2.RateControl')
+        self.mock_rate_control = ratecontrol_patcher.start()
+
+    def realpath(self, path):
+        return self.real_paths.get(path)
+
+    def create_dummy_device(self):
+        rdev = 65024
+        fake_device_stat = os.stat_result(
+            (stat.S_IFBLK, 0, 0, 1, 0, 0, 0, 0, 0, 0), {'st_rdev': rdev})
+        self.mock_os.stat.return_value = fake_device_stat
+
     def test_tap_wanted_returns_true_for_udev_device(self):
         result = self.vdi.tap_wanted()
 
@@ -168,7 +199,7 @@ class TestVDI(unittest.TestCase):
     @mock.patch('blktap2.VDI.NBDLink', autospec=NBDLinkForTest)
     @mock.patch('blktap2.VDI.NBDLink', autospec=NBDLinkForTest)
     def test_linknbd(self, nbd_link2, nbd_link):
-        self.vdi.tap = blktap2.Tapdisk(123, 456, "blah", "blah", "blah")
+        self.vdi.tap = self.real_tapdisk(123, 456, "blah", "blah", "blah")
         nbd_link.from_uuid.return_value = nbd_link2
         self.vdi.linkNBD("blahblah", "yadayada")
         expected_path = '/run/blktap-control/nbd%d.%d' % (123, 456)
@@ -179,10 +210,8 @@ class TestVDI(unittest.TestCase):
     @mock.patch('blktap2.util.get_this_host', autospec=True)
     @mock.patch('blktap2.VDI._attach', autospec=True)
     @mock.patch('blktap2.VDI.PhyLink', autospec=True)
-    @mock.patch('blktap2.VDI.BackendLink', autospec=True)
     @mock.patch('blktap2.VDI.NBDLink', autospec=True)
-    @mock.patch('blktap2.Tapdisk')
-    def test_activate(self, mock_tapdisk, mock_nbd_link, mock_backend,
+    def test_activate(self, mock_nbd_link,
                       mock_phy, mock_attach,
                       mock_this_host, mock_sleep):
         """
@@ -208,11 +237,9 @@ class TestVDI(unittest.TestCase):
     @mock.patch('blktap2.util.get_this_host', autospec=True)
     @mock.patch('blktap2.VDI._attach', autospec=True)
     @mock.patch('blktap2.VDI.PhyLink', autospec=True)
-    @mock.patch('blktap2.VDI.BackendLink', autospec=True)
     @mock.patch('blktap2.VDI.NBDLink', autospec=True)
-    @mock.patch('blktap2.Tapdisk')
     def test_activate_relink_retry(
-            self, mock_tapdisk, mock_nbd_link, mock_backend,
+            self, mock_nbd_link,
             mock_phy, mock_attach,
             mock_this_host, mock_sleep):
         """
@@ -236,11 +263,10 @@ class TestVDI(unittest.TestCase):
     @mock.patch('blktap2.util.get_this_host', autospec=True)
     @mock.patch('blktap2.VDI._attach', autospec=True)
     @mock.patch('blktap2.VDI.PhyLink', autospec=True)
-    @mock.patch('blktap2.VDI.BackendLink', autospec=True)
     @mock.patch('blktap2.VDI.NBDLink', autospec=True)
     @mock.patch('blktap2.Tapdisk')
     def test_activate_pause_retry(
-            self, mock_tapdisk, mock_nbd_link, mock_backend,
+            self, mock_tapdisk, mock_nbd_link,
             mock_phy, mock_attach,
             mock_this_host, mock_sleep):
         """
@@ -263,11 +289,10 @@ class TestVDI(unittest.TestCase):
     @mock.patch('blktap2.util.get_this_host', autospec=True)
     @mock.patch('blktap2.VDI._attach', autospec=True)
     @mock.patch('blktap2.VDI.PhyLink', autospec=True)
-    @mock.patch('blktap2.VDI.BackendLink', autospec=True)
     @mock.patch('blktap2.VDI.NBDLink', autospec=True)
     @mock.patch('blktap2.Tapdisk')
     def test_activate_paused_while_tagging(
-            self, mock_tapdisk, mock_nbd_link, mock_backend,
+            self, mock_tapdisk, mock_nbd_link,
             mock_phy, mock_attach,
             mock_this_host, mock_sleep):
         """
@@ -296,11 +321,10 @@ class TestVDI(unittest.TestCase):
     @mock.patch('blktap2.util.get_this_host', autospec=True)
     @mock.patch('blktap2.VDI._attach', autospec=True)
     @mock.patch('blktap2.VDI.PhyLink', autospec=True)
-    @mock.patch('blktap2.VDI.BackendLink', autospec=True)
     @mock.patch('blktap2.VDI.NBDLink', autospec=True)
     @mock.patch('blktap2.Tapdisk')
     def test_activate_relink_while_tagging(
-            self, mock_tapdisk, mock_nbd_link, mock_backend,
+            self, mock_tapdisk, mock_nbd_link,
             mock_phy, mock_attach,
             mock_this_host, mock_sleep):
         """
@@ -324,6 +348,53 @@ class TestVDI(unittest.TestCase):
             [mock.call('vref1', 'host_href1'),
              mock.call('vref1', 'activating')],
             any_order=True)
+
+    @mock.patch('blktap2.util.get_this_host', autospec=True)
+    def test_deactivate(self, mock_this_host):
+        """
+        Test blktap2.VDI.deactivate
+        """
+        host_uuid = str(uuid.uuid4())
+        mock_this_host.return_value = host_uuid
+
+        self.mock_session.xenapi.host.get_by_uuid.return_value = 'href1'
+        self.create_dummy_device()
+
+        self.real_paths[
+            f'/run/blktap-control/nbd/{self.sr_uuid}/{self.vdi_uuid}'] = \
+                '/run/blktap-control/nbd34876.3'
+
+        self.vdi.deactivate(self.sr_uuid, self.vdi_uuid, {})
+
+        self.mock_target.deactivate.assert_called_with(
+            self.sr_uuid, self.vdi_uuid)
+        self.assertEqual(1, self.mock_tapdisk.from_minor().shutdown.call_count)
+        self.assertEqual(
+            1, self.mock_rate_control.return_value.stop.call_count)
+
+    @mock.patch('blktap2.util.get_this_host', autospec=True)
+    def test_deactivate_isovdi(self, mock_this_host):
+        """
+        Test blktap2.VDI.deactivate
+        """
+        host_uuid = str(uuid.uuid4())
+        mock_this_host.return_value = host_uuid
+        self.mock_session.xenapi.host.get_by_uuid.return_value = 'href1'
+        self.create_dummy_device()
+        mock_vdi = mock.Mock(spec='ISOSR.ISOVDI')
+        mock_vdi.sr = mock.MagicMock(autospec=SR)
+        self.mock_sm_vdi.VDI.from_uuid.return_value = mock_vdi
+        self.real_paths[
+            f'/run/blktap-control/nbd/{self.sr_uuid}/{self.vdi_uuid}'] = \
+                '/run/blktap-control/nbd34876.3'
+
+        self.vdi.deactivate(self.sr_uuid, self.vdi_uuid, {})
+
+        self.mock_target.deactivate.assert_called_with(
+            self.sr_uuid, self.vdi_uuid)
+        self.assertEqual(1, self.mock_tapdisk.from_minor().shutdown.call_count)
+        self.assertEqual(
+            0, self.mock_rate_control.return_value.stop.call_count)
 
 
 class TestTapCtl(unittest.TestCase):
@@ -683,6 +754,28 @@ class TestTapCtl(unittest.TestCase):
         self.assertIn('-c /dev/VG_XenStorage-9bf5335b-7fef-298c-109c-'
                       '1d12e931edfd/b76f0618-4dad-4b15-825f'
                       '-b0b0fb006d67.cbtlog',
+                      proc_args)
+
+    def test_unpause_rate_limit(self):
+        """
+        TapCtl unpause, CBT logging
+        """
+        mock_process = mock.MagicMock(autospec='subprocess.Popen')
+        mock_process.stdout = StringIO('')
+        mock_process.wait.return_value = 0
+        self.mock_subprocess.Popen.side_effect = [mock_process]
+
+        blktap2.TapCtl.unpause(
+            22127, 2,
+            cbtlog=None,
+            ratelimit_sock='/run/test-sm/dummy/rate-testing.sk')
+
+        self.assertEqual(1, self.mock_subprocess.Popen.call_count)
+        proc_args = ' '.join(self.mock_subprocess.Popen.call_args[0][0])
+        self.assertIn('/usr/sbin/tap-ctl unpause', proc_args)
+        self.assertIn('-p 22127', proc_args)
+        self.assertIn('-m 2', proc_args)
+        self.assertIn('-l /run/test-sm/dummy/rate-testing.sk',
                       proc_args)
 
     def test_open(self):
