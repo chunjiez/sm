@@ -1142,6 +1142,8 @@ def set_scheduler_sysfs_node(node, scheds):
 
 
 def set_scheduler(dev, schedulers=None):
+    return
+
     if schedulers is None:
         schedulers = ["none", "noop"]
 
